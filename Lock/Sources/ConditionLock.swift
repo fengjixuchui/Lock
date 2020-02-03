@@ -8,7 +8,7 @@
 
 import Foundation
 
-// MARK: ConditionLock
+// 条件锁
 
 public class ConditionLock {
     private var _condition: Int64
@@ -25,12 +25,12 @@ public class ConditionLock {
     }
     
     deinit {
-        mach_port_deallocate(mach_task_self_, lock_msg_port)
+        freePort(lock_msg_port)
     }
     
     public func lock() {
         while !OSAtomicCompareAndSwap32(0, 1, &value) {
-            lock_message_receive(port: lock_msg_port)
+            lock_message_receive(at: lock_msg_port)
         }
     }
     
@@ -41,19 +41,19 @@ public class ConditionLock {
                 break
             }
         }
-        lock_message_send(port: lock_msg_port)
+        lock_message_send(to: lock_msg_port)
     }
     
     public func lock(whenCondition condition: Int64) {
         while true {
             if OSAtomicCompareAndSwap32(0, 1, &value) {   // 先抢占锁
-                if OSAtomicAdd64(0, &_condition) == condition {  // 在判断条件是否符合
+                if OSAtomicAdd64(0, &_condition) == condition {  // 再判断条件是否符合
                     break
                 } else {
                     unlock()
                 }
             }
-            lock_message_receive(port: lock_msg_port)
+            lock_message_receive(at: lock_msg_port)
         }
     }
     
