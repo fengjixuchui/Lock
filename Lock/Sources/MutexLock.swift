@@ -11,55 +11,83 @@ import Foundation
 // MARK: 互斥锁
 
 public class MutexLock {
-    private var lock_msg_port: mach_port_t
-    private var value: Int32 = 0
-    
-    init?() {
-        if let port = allocatePort() {
-            lock_msg_port = port
-        } else {
-            return nil
-        }
-    }
-    
-    deinit {
-        freePort(lock_msg_port)
-    }
-    
+    private var lockValue: Int32 = 0
+    private var waitThreads = [qos_class_t.RawValue: [thread_t]]()
+    private var waitThreadsValue: Int32 = 0
+
     public func lock() {
-        while !OSAtomicCompareAndSwap32(0, 1, &value) {
-            // 非忙等，将线程加入到消息等待队列；等到解锁消息到来，重新调度尝试获取锁
-            lock_message_receive(at: lock_msg_port)
+        while !OSAtomicCompareAndSwap32(0, 1, &lockValue) {
+            yield()
         }
     }
-    
+
     public func unlock() {
-        value = 0
-        // 发送解锁消息(xnu: ipc_mqueue_post)
-        lock_message_send(to: lock_msg_port)
+        lockValue = 0
+        resume()
+    }
+    
+    private func yield() {
+        let thread = mach_thread_self()
+        let qos = qos_class_self().rawValue
+        
+        while !OSAtomicCompareAndSwap32(0, 1, &waitThreadsValue) {}
+        
+        if waitThreads[qos] != nil {
+            waitThreads[qos]?.append(thread)
+        } else {
+            waitThreads[qos] = [thread]
+        }
+        
+        waitThreadsValue = 0
+        thread_suspend(thread)
+    }
+    
+    private func resume() {
+        var thread: thread_t?
+        
+        while !OSAtomicCompareAndSwap32(0, 1, &waitThreadsValue) {}
+        if let maxQos = waitThreads.keys.max() {
+            thread = waitThreads[maxQos]?.removeFirst()     // FIFO
+            if waitThreads[maxQos]?.count == 0 {
+                waitThreads[maxQos] = nil
+            }
+        }
+        waitThreadsValue = 0
+        
+        if thread != nil { thread_resume(thread!) }
     }
 }
 
 
+
 // MARK: Test
 func TestMutexLock() {
-    let thread_count = 2000
+    let concurrentCount = 2000
     let lock = MutexLock()
     var value = 0
-    
-    assert(lock != nil)
 
-    for _ in 0..<thread_count {
-        Thread.detachNewThread {
-            Thread.sleep(forTimeInterval: 1)  // for concurrent
-            
-//            lock!.lock()
-            value += 1
-//            lock!.unlock()
+    let queue = DispatchQueue(label: "MutexLockQueue", qos: .default, attributes: .concurrent)
+    let queue1 = DispatchQueue(label: "MutexLockQueue2", qos: .userInteractive, attributes: .concurrent)
+    
+    for i in 0..<concurrentCount {
+        if i % 2 == 0 {
+            queue.async {
+                lock.lock()
+                value += 1
+                lock.unlock()
+            }
+        } else {
+            queue1.async {
+                lock.lock()
+                value += 1
+                lock.unlock()
+            }
         }
     }
 
-    RunLoop.current.run(until: Date() + 4)
-
-    assert(value == thread_count)
+    queue.sync(flags: .barrier, execute: {})
+    queue1.sync(flags: .barrier, execute: {})
+    
+    assert(value == concurrentCount)
+    print("MutexLock Test Success")
 }
