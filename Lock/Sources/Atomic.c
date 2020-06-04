@@ -95,22 +95,9 @@ _Bool LockAtomicCompareAndSwap32(int32_t oldValue, int32_t newValue, int32_t* th
                      :
                      :"memory", "eax"
                      );
-    
-//    asm{
-//        mov eax, edi;
-//        lock;
-//        cmpxchg [rdx], rsi;
-//        je equal;
-//        jmp notEqual;
-//    equal:
-//        mov result, 0x1;
-//        jmp end;
-//    notEqual:
-//        mov result, 0x0;
-//    end:
-//    };
-    
     return result;
 };
+
+//#define LockLoad(ptr) __asm__ volatile( lwarx )
 
 #endif
