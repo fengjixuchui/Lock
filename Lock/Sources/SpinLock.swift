@@ -11,7 +11,7 @@ import Foundation
 // 自旋锁
 
 public class SpinLock {
-    private var value: Int32 = 0
+    private var lockValue: Int32 = 0
     
     private static var PreQosClassKey: pthread_key_t = 0
     private static let swiftOnceRegisterSpinLockThreadKey = {
@@ -24,7 +24,7 @@ public class SpinLock {
     }
 
     public func lock() {
-        while !LockAtomicCompareAndSwap32(0, 1, &value) {
+        while !LockAtomicCompareAndSwap32(0, 1, &lockValue) {
             // sched_yield() 主动放弃时间片？
         }
 
@@ -59,7 +59,7 @@ public class SpinLock {
             pthread_setspecific(Self.PreQosClassKey, nil)
         }
 
-        value = 0
+        lockValue = 0
         
         if preQosClassSelf != nil {
             pthread_set_qos_class_self_np(preQosClassSelf!.pointee, 0)
@@ -75,19 +75,30 @@ func TestSpinLock() {
     let lock = SpinLock()
     var value = 0
 
-    let queue = DispatchQueue(label: "SpinLockQueue", qos: .userInteractive, attributes: .concurrent)
+    let queue = DispatchQueue(label: "SpinLockQueue1", qos: .background, attributes: .concurrent)   // 设置一个低优先级
+    let queue1 = DispatchQueue(label: "SpinLockQueue2", qos: .userInteractive, attributes: .concurrent)
     
-    for _ in 0..<concurrentCount {
-        queue.async {
-            lock.lock()
-            Thread.sleep(forTimeInterval: 0.01)
-            value += 1
-            lock.unlock()
+    for i in 0..<concurrentCount {
+        if i % 2 == 0 {
+            queue.async {
+                lock.lock()
+                Thread.sleep(forTimeInterval: 0.01)
+                value += 1
+                lock.unlock()
+            }
+        } else {
+            queue1.async {
+                lock.lock()
+                Thread.sleep(forTimeInterval: 0.01)
+                value += 1
+                lock.unlock()
+            }
         }
     }
 
-    queue.sync(flags: .barrier) { () -> Void in
-        assert(value == concurrentCount)
-        print("SpinLock Test Success")
-    }
+    queue1.sync(flags: .barrier, execute: {})
+    queue.sync(flags: .barrier, execute: {})
+
+    assert(value == concurrentCount)
+    print("SpinLock Test Success")
 }
